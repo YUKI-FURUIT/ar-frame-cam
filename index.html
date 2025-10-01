@@ -3,20 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
-<title>フルスクリーン・フレーム付きカメラ</title>
+<title>フルスクリーン・フレーム付きカメラ（撮影対応）</title>
 <style>
   :root { --pad: max(12px, env(safe-area-inset-bottom)); }
   html,body{margin:0;height:100%;background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,Noto Sans JP,sans-serif}
   .stage{position:fixed; inset:0; overflow:hidden; background:#000;}
   video#cam{position:absolute; inset:0; width:100%; height:100%; object-fit:cover;}
-  img#frame{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) scale(1) rotate(0deg); transform-origin:center center; pointer-events:none; user-select:none; max-width:100%; max-height:100%;}
+  /* フレームは中央基準。最大100%の中でcontain相当 → その上からtransform適用 */
+  img#frame{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%) scale(1) rotate(0deg);
+            transform-origin:center center; pointer-events:none; user-select:none; max-width:100%; max-height:100%;}
   .touch-layer{position:absolute; inset:0; touch-action:none;}
-  .ui{position:fixed; left:0; right:0; bottom:0; display:flex; gap:8px; justify-content:center; padding: var(--pad); background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.5) 40%, rgba(0,0,0,.7) 100%); }
+  .ui{position:fixed; left:0; right:0; bottom:0; display:flex; flex-wrap:wrap; gap:8px;
+      justify-content:center; padding: var(--pad);
+      background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,.5) 40%, rgba(0,0,0,.7) 100%); }
   button,label.btn{appearance:none; border:0; border-radius:999px; padding:10px 14px; background:#2d2f39; color:#fff; font-size:14px}
   input[type=file]{display:none}
-  .topbar{position:fixed; left:0; right:0; top:0; padding:10px; display:flex; justify-content:space-between; gap:8px; background: linear-gradient(180deg, rgba(0,0,0,.65), rgba(0,0,0,0));}
+  .topbar{position:fixed; left:0; right:0; top:0; padding:10px; display:flex; justify-content:space-between; gap:8px;
+          background: linear-gradient(180deg, rgba(0,0,0,.65), rgba(0,0,0,0));}
   .ghost{opacity:.6}
   .range{appearance:none;width:160px}
+  canvas#shot{display:none;}
 </style>
 </head>
 <body>
@@ -39,37 +45,44 @@
     <label class="btn" for="file">フレーム選択</label>
     <input id="file" type="file" accept="image/png,image/*">
     <button id="reset">リセット</button>
+    <button id="capture" style="background:#3a82f7">撮影して保存</button>
   </div>
+
+  <canvas id="shot"></canvas>
 
 <script>
   const video = document.getElementById('cam');
   const frame = document.getElementById('frame');
   const touch = document.getElementById('touch');
   const alpha = document.getElementById('alpha');
+  const stage = document.getElementById('stage');
+  const canvas = document.getElementById('shot');
   let stream; let usingBack = true;
 
   // フレーム状態
   const S = { x: 0, y: 0, scale: 1, rot: 0 };
   function apply() {
     frame.style.opacity = (alpha.value/100).toString();
-    frame.style.transform = `translate(calc(-50% + ${S.x}px), calc(-50% + ${S.y}px)) scale(${S.scale}) rotate(${S.rot}deg)`;
+    frame.style.transform =
+      `translate(calc(-50% + ${S.x}px), calc(-50% + ${S.y}px)) scale(${S.scale}) rotate(${S.rot}deg)`;
   }
 
   async function startCamera() {
-    try {
-      if (stream) stream.getTracks().forEach(t=>t.stop());
+    try{
+      if(stream) stream.getTracks().forEach(t=>t.stop());
       stream = await navigator.mediaDevices.getUserMedia({
         audio:false,
-        video:{ facingMode: usingBack ? { exact:'environment' } : 'user', width:{ ideal:1920 }, height:{ ideal:1080 } }
+        video:{ facingMode: usingBack ? {exact:'environment'} : 'user',
+                width:{ideal:1920}, height:{ideal:1080} }
       });
       video.srcObject = stream;
-      video.style.transform = usingBack ? 'scaleX(1)' : 'scaleX(-1)'; // 自撮りはミラー
-    } catch(e) {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video:true, audio:false });
+      video.style.transform = usingBack ? 'scaleX(1)' : 'scaleX(-1)'; // 自撮りはミラー表示
+    }catch(e){
+      try{
+        stream = await navigator.mediaDevices.getUserMedia({video:true,audio:false});
         video.srcObject = stream;
-      } catch(err) {
-        alert('カメラ開始に失敗。HTTPSと権限を確認してください\n' + (err?.message||''));
+      }catch(err){
+        alert('カメラ開始に失敗。HTTPSと権限を確認してください\n'+(err?.message||''));
       }
     }
   }
@@ -92,8 +105,8 @@
   // タッチ操作（ドラッグ、ピンチ、回転）
   let touches = new Map();
   let start = null; // {x,y,d,a, x0,y0, scale0, rot0}
-  function dist(a,b){ const dx=a.x-b.x, dy=a.y-b.y; return Math.hypot(dx,dy); }
-  function angle(a,b){ return Math.atan2(b.y-a.y, b.x-a.x); }
+  const dist = (a,b)=> Math.hypot(a.x-b.x, a.y-b.y);
+  const angle = (a,b)=> Math.atan2(b.y-a.y, b.x-a.x);
   const getTouches = () => Array.from(touches.values());
 
   touch.addEventListener('touchstart', (e)=>{
@@ -110,7 +123,8 @@
 
   touch.addEventListener('touchmove', (e)=>{
     e.preventDefault();
-    for (const t of e.changedTouches) if (touches.has(t.identifier)) touches.set(t.identifier, { x:t.clientX, y:t.clientY });
+    for (const t of e.changedTouches)
+      if (touches.has(t.identifier)) touches.set(t.identifier, { x:t.clientX, y:t.clientY });
     if (!start) return;
     const ts = getTouches();
     if (ts.length===1) {
@@ -134,7 +148,7 @@
   touch.addEventListener('touchend', end);
   touch.addEventListener('touchcancel', end);
 
-  // マウス操作（PC確認用）
+  // マウス（PC確認用）
   let dragging=false, lx=0, ly=0;
   touch.addEventListener('mousedown', (e)=>{ dragging=true; lx=e.clientX; ly=e.clientY; });
   window.addEventListener('mousemove', (e)=>{
@@ -147,7 +161,71 @@
     S.scale = Math.max(0.1, S.scale * f); apply();
   }, {passive:true});
 
-  // ヒントを数秒で薄く
+  // ===== 撮影 → PNG保存（Canvas合成） =====
+  function sizeCanvasToStage(){
+    const r = stage.getBoundingClientRect();
+    canvas.width  = Math.round(r.width  * devicePixelRatio);
+    canvas.height = Math.round(r.height * devicePixelRatio);
+    return {w:canvas.width, h:canvas.height, scale:devicePixelRatio, viewW:r.width, viewH:r.height};
+  }
+
+  // 画面内のimg#frameの“基準サイズ（contain）”を計算
+  function computeContainSize(imgW, imgH, viewW, viewH){
+    const imgRatio = imgW / imgH;
+    const viewRatio = viewW / viewH;
+    let drawW, drawH;
+    if (imgRatio > viewRatio) { // 横長 → 幅基準
+      drawW = viewW; drawH = drawW / imgRatio;
+    } else {
+      drawH = viewH; drawW = drawH * imgRatio;
+    }
+    return {drawW, drawH};
+  }
+
+  document.getElementById('capture').addEventListener('click', ()=>{
+    if (!video.srcObject) { alert('先にカメラを開始してください'); return; }
+
+    const {w, h, scale, viewW, viewH} = sizeCanvasToStage();
+    const ctx = canvas.getContext('2d');
+
+    // 背面/前面の左右反転を反映してビデオを描画
+    ctx.save();
+    if (!usingBack) { ctx.translate(w, 0); ctx.scale(-1, 1); }
+    ctx.drawImage(video, 0, 0, w, h);
+    ctx.restore();
+
+    // フレーム合成（DOMのtransformに合わせた translate/scale/rotate）
+    if (frame.complete && frame.naturalWidth > 0) {
+      // まずは“画面内に収まる基準サイズ”（contain）
+      const {drawW, drawH} = computeContainSize(frame.naturalWidth, frame.naturalHeight, viewW, viewH);
+      const baseW = drawW * scale, baseH = drawH * scale;
+
+      // 画面中央を基準に、Sの変形を適用
+      const cx = w/2 + S.x * scale;
+      const cy = h/2 + S.y * scale;
+
+      ctx.save();
+      ctx.globalAlpha = alpha.value/100;
+      ctx.translate(cx, cy);
+      ctx.rotate(S.rot * Math.PI/180);
+      ctx.scale(S.scale, S.scale);
+      ctx.drawImage(frame, -baseW/2, -baseH/2, baseW, baseH);
+      ctx.restore();
+    }
+
+    // ダウンロード
+    canvas.toBlob((blob)=>{
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `shot_${Date.now()}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(()=> URL.revokeObjectURL(a.href), 2000);
+    }, 'image/png');
+  });
+
+  // ヒントを数秒でフェード
   setTimeout(()=> document.getElementById('hint').style.opacity = .0, 4000);
 </script>
 </body>
